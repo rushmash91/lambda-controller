@@ -33,6 +33,7 @@ var (
 	ErrFunctionPending         = errors.New("function in 'Pending' state, cannot be modified or deleted")
 	ErrSourceImageDoesNotExist = errors.New("source image does not exist")
 	ErrCannotSetFunctionCSC    = errors.New("cannot set function code signing config when package type is Image")
+	ErrLastUpdateStatusInProgress = errors.New("last update status is in progress, cannot update function")
 )
 
 var (
@@ -42,6 +43,10 @@ var (
 	)
 	requeueWaitWhileSourceImageDoesNotExist = ackrequeue.NeededAfter(
 		ErrSourceImageDoesNotExist,
+		1*time.Minute,
+	)
+	requeueWaitWhileLastUpdateStatusInProgress = ackrequeue.NeededAfter(
+		ErrLastUpdateStatusInProgress,
 		1*time.Minute,
 	)
 )
@@ -54,6 +59,15 @@ func isFunctionPending(r *resource) bool {
 	}
 	state := *r.ko.Status.State
 	return state == string(svcapitypes.State_Pending)
+}
+
+// isLastUpdateStatusInProgress returns true if the last update status is in progress
+func isLastUpdateStatusInProgress(r *resource) bool {
+	if r.ko.Status.LastUpdateStatus == nil {
+		return false
+	}
+	status := *r.ko.Status.LastUpdateStatus
+	return status == string(svcapitypes.LastUpdateStatus_InProgress)
 }
 
 // customUpdateFunction patches each of the resource properties in the backend AWS
@@ -71,6 +85,10 @@ func (rm *resourceManager) customUpdateFunction(
 
 	if isFunctionPending(desired) {
 		return nil, requeueWaitWhilePending
+	}
+
+	if isLastUpdateStatusInProgress(desired) {
+		return nil, requeueWaitWhileLastUpdateStatusInProgress
 	}
 
 	if delta.DifferentAt("Spec.Tags") {
